@@ -1,0 +1,20 @@
+env: Walker2d-v2
+version: "0116"
+layer_size: 256
+replay_buffer_size: 1000000
+algorithm_kwargs:
+  num_epochs: 1000
+  num_eval_steps_per_epoch: 5000
+  num_trains_per_train_loop: 1000
+  num_expl_steps_per_train_loop: 1000
+  min_num_steps_before_training: 1000
+  max_path_length: 1000
+  batch_size: 256
+trainer_kwargs:
+  discount: 0.99
+  soft_target_tau: 5.e-3
+  target_update_period: 1
+  policy_lr: 3.e-4
+  qf_lr: 3.e-4
+  reward_scale: 5
+  use_automatic_entropy_tuning: False

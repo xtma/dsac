@@ -1,0 +1,27 @@
+env: Ant-v2
+version: clip
+layer_size: 256
+num_quantiles: 32
+replay_buffer_size: 1000000
+model_kwargs:
+  hidden_activation: leaky_relu
+  layer_norm: True
+algorithm_kwargs:
+  num_epochs: 1000
+  num_eval_steps_per_epoch: 5000
+  num_trains_per_train_loop: 3000
+  num_expl_steps_per_train_loop: 3000
+  min_num_steps_before_training: 10000
+  max_path_length: 1000
+  batch_size: 256
+trainer_kwargs:
+  discount: 0.99
+  soft_target_tau: 5.e-3
+  target_update_period: 1
+  policy_lr: 3.e-4
+  fp_lr: 1.e-4
+  zf_lr: 3.e-4
+  reward_scale: 5
+  use_automatic_entropy_tuning: False
+  use_popart: False
+  clip_grad: 10.
