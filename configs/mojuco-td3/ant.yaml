@@ -1,5 +1,5 @@
 env: Ant-v2
-version: "0116"
+version: normal
 replay_buffer_size: 1000000
 qf_kwargs:
   hidden_sizes: [256, 256]

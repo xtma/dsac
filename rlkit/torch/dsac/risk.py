@@ -16,8 +16,6 @@ def risk_fn(tau, mode="neutral", param=0):
             return ptu.from_numpy(fn(ptu.get_numpy(tau).clip(0., 1.)))
         elif mode == "cvar":
             return (1. / param * tau).clamp(0., 1.)
-        elif mode == "icvar":
-            return (1. / (1. - param) * tau).clamp(0., 1.)
         elif mode == "pow":
             return tau.clamp(0., 1.).pow(1. + param)
         elif mode == "cpw":

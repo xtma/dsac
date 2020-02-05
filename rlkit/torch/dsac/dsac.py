@@ -51,7 +51,7 @@ class DSACTrainer(TorchTrainer):
             policy_lr=3e-4,
             fp_lr=1e-4,
             zf_lr=3e-4,
-            clip_grad=1000.,
+            clip_grad=10000.,
             risk_type="neutral",
             risk_param=0.,
             risk_param_final=None,
@@ -61,7 +61,7 @@ class DSACTrainer(TorchTrainer):
             target_update_period=1,
             plotter=None,
             render_eval_paths=False,
-            use_automatic_entropy_tuning=True,
+            use_automatic_entropy_tuning=False,
             use_popart=False,
             target_entropy=None,
     ):
@@ -160,8 +160,9 @@ class DSACTrainer(TorchTrainer):
         tau = torch.cumsum(presum_tau, dim=1)  # (N, T), note that they are tau1...tauN in the paper
         entropy_loss = -self.entropy_penalty * Categorical(presum_tau).entropy().mean()
         with torch.no_grad():
-            tau_hat = tau / 2.
-            tau_hat[:, 1:] += tau_hat[:, :-1]
+            tau_hat = ptu.zeros_like(tau)
+            tau_hat[:, 0:1] = tau[:, 0:1] / 2.
+            tau_hat[:, 1:] = (tau[:, 1:] + tau[:, :-1]) / 2.
         """
         ZF Loss
         """
@@ -174,8 +175,9 @@ class DSACTrainer(TorchTrainer):
             )
             next_presum_tau = self.target_fp(next_obs, new_next_actions)
             next_tau = torch.cumsum(next_presum_tau, dim=1)  # (N, T)
-            next_tau_hat = next_tau / 2.
-            next_tau_hat[:, 1:] += next_tau_hat[:, :-1]
+            next_tau_hat = ptu.zeros_like(next_tau)
+            next_tau_hat[:, 0:1] = next_tau[:, 0:1] / 2.
+            next_tau_hat[:, 1:] = (next_tau[:, 1:] + next_tau[:, :-1]) / 2.
 
             target_z1_values = self.target_zf1(next_obs, new_next_actions, next_tau_hat)
             target_z2_values = self.target_zf2(next_obs, new_next_actions, next_tau_hat)
@@ -207,10 +209,13 @@ class DSACTrainer(TorchTrainer):
             z1_new_actions = self.zf1_normer.unnorm(z1_new_actions)
             z2_new_actions = self.zf2_normer.unnorm(z2_new_actions)
         risk_param = self.risk_schedule(self._n_train_steps_total)
-        distorted_tau = risk_fn(tau.detach(), self.risk_type, risk_param)
-        distorted_tau[:, 1:] -= distorted_tau[:, :-1]
-        q1_new_actions = torch.sum(distorted_tau * z1_new_actions, dim=1, keepdims=True)
-        q2_new_actions = torch.sum(distorted_tau * z2_new_actions, dim=1, keepdims=True)
+        with torch.no_grad():
+            distorted_tau = risk_fn(tau, self.risk_type, risk_param)
+            risk_weights = ptu.zeros_like(distorted_tau)
+            risk_weights[:, 0:1] = distorted_tau[:, 0:1]
+            risk_weights[:, 1:] = distorted_tau[:, 1:] - distorted_tau[:, :-1]
+        q1_new_actions = torch.sum(risk_weights * z1_new_actions, dim=1, keepdims=True)
+        q2_new_actions = torch.sum(risk_weights * z2_new_actions, dim=1, keepdims=True)
         q_new_actions = torch.min(q1_new_actions, q2_new_actions)
         policy_loss = (alpha * log_pi - q_new_actions).mean()
         if self.use_popart:
