@@ -191,7 +191,6 @@ class DSACTrainer(TorchTrainer):
             target_z2_values += -(target_q2_values - target_q_values) - alpha * new_log_pi
             z1_target = self.reward_scale * rewards + (1. - terminals) * self.discount * target_z1_values
             z2_target = self.reward_scale * rewards + (1. - terminals) * self.discount * target_z2_values
-
             if self.use_popart:
                 z1_target = self.zf1_normer.update(z1_target)
                 z2_target = self.zf2_normer.update(z2_target)
@@ -203,17 +202,23 @@ class DSACTrainer(TorchTrainer):
         """
         Policy Loss
         """
-        z1_new_actions = self.zf1(obs, new_obs_actions, tau_hat)
-        z2_new_actions = self.zf2(obs, new_obs_actions, tau_hat)
-        if self.use_popart:
-            z1_new_actions = self.zf1_normer.unnorm(z1_new_actions)
-            z2_new_actions = self.zf2_normer.unnorm(z2_new_actions)
-        risk_param = self.risk_schedule(self._n_train_steps_total)
         with torch.no_grad():
-            distorted_tau = risk_fn(tau, self.risk_type, risk_param)
+            new_presum_tau = self.fp(obs, new_obs_actions)
+            new_tau = torch.cumsum(new_presum_tau, dim=1)  # (N, T)
+            new_tau_hat = ptu.zeros_like(new_tau)
+            new_tau_hat[:, 0:1] = new_tau[:, 0:1] / 2.
+            new_tau_hat[:, 1:] = (new_tau[:, 1:] + new_tau[:, :-1]) / 2.
+            risk_param = self.risk_schedule(self._n_train_steps_total)
+            distorted_tau = risk_fn(new_tau, self.risk_type, risk_param)
             risk_weights = ptu.zeros_like(distorted_tau)
             risk_weights[:, 0:1] = distorted_tau[:, 0:1]
             risk_weights[:, 1:] = distorted_tau[:, 1:] - distorted_tau[:, :-1]
+
+        z1_new_actions = self.zf1(obs, new_obs_actions, new_tau_hat)
+        z2_new_actions = self.zf2(obs, new_obs_actions, new_tau_hat)
+        if self.use_popart:
+            z1_new_actions = self.zf1_normer.unnorm(z1_new_actions)
+            z2_new_actions = self.zf2_normer.unnorm(z2_new_actions)
         q1_new_actions = torch.sum(risk_weights * z1_new_actions, dim=1, keepdims=True)
         q2_new_actions = torch.sum(risk_weights * z2_new_actions, dim=1, keepdims=True)
         q_new_actions = torch.min(q1_new_actions, q2_new_actions)
