@@ -1,5 +1,6 @@
 import os
 
+import cloudpickle
 from gym.spaces import Box, Discrete, Tuple
 
 ENV_ASSET_DIR = os.path.join(os.path.dirname(__file__), 'assets')
@@ -27,3 +28,16 @@ def mode(env, mode_type):
         getattr(env, mode_type)()
     except AttributeError:
         pass
+
+
+class CloudpickleWrapper(object):
+    """A cloudpickle wrapper used in :class:`~tianshou.env.SubprocVectorEnv`"""
+
+    def __init__(self, data):
+        self.data = data
+
+    def __getstate__(self):
+        return cloudpickle.dumps(self.data)
+
+    def __setstate__(self, data):
+        self.data = cloudpickle.loads(data)

@@ -8,6 +8,7 @@ from rlkit.samplers.data_collector.base import StepCollector
 
 
 class MdpStepCollector(StepCollector):
+
     def __init__(
             self,
             env,
@@ -73,9 +74,7 @@ class MdpStepCollector(StepCollector):
             self._start_new_rollout()
 
         action, agent_info = self._policy.get_action(self._obs)
-        next_ob, reward, terminal, env_info = (
-            self._env.step(action)
-        )
+        next_ob, reward, terminal, env_info = (self._env.step(action))
         if self._render:
             self._env.render(**self._render_kwargs)
         terminal = np.array([terminal])
@@ -91,8 +90,7 @@ class MdpStepCollector(StepCollector):
             env_infos=env_info,
         )
         if terminal or len(self._current_path_builder) >= max_path_length:
-            self._handle_rollout_ending(max_path_length,
-                                        discard_incomplete_paths)
+            self._handle_rollout_ending(max_path_length, discard_incomplete_paths)
             self._start_new_rollout()
         else:
             self._obs = next_ob
@@ -101,19 +99,11 @@ class MdpStepCollector(StepCollector):
         self._current_path_builder = PathBuilder()
         self._obs = self._env.reset()
 
-    def _handle_rollout_ending(
-            self,
-            max_path_length,
-            discard_incomplete_paths
-    ):
+    def _handle_rollout_ending(self, max_path_length, discard_incomplete_paths):
         if len(self._current_path_builder) > 0:
             path = self._current_path_builder.get_all_stacked()
             path_len = len(path['actions'])
-            if (
-                    path_len != max_path_length
-                    and not path['terminals'][-1]
-                    and discard_incomplete_paths
-            ):
+            if (path_len != max_path_length and not path['terminals'][-1] and discard_incomplete_paths):
                 return
             self._epoch_paths.append(path)
             self._num_paths_total += 1
@@ -121,6 +111,7 @@ class MdpStepCollector(StepCollector):
 
 
 class GoalConditionedStepCollector(StepCollector):
+
     def __init__(
             self,
             env,
@@ -203,9 +194,7 @@ class GoalConditionedStepCollector(StepCollector):
             self._obs[self._desired_goal_key],
         ))
         action, agent_info = self._policy.get_action(new_obs)
-        next_ob, reward, terminal, env_info = (
-            self._env.step(action)
-        )
+        next_ob, reward, terminal, env_info = (self._env.step(action))
         if self._render:
             self._env.render(**self._render_kwargs)
         terminal = np.array([terminal])
@@ -221,8 +210,7 @@ class GoalConditionedStepCollector(StepCollector):
             env_infos=env_info,
         )
         if terminal or len(self._current_path_builder) >= max_path_length:
-            self._handle_rollout_ending(max_path_length,
-                                        discard_incomplete_paths)
+            self._handle_rollout_ending(max_path_length, discard_incomplete_paths)
             self._start_new_rollout()
         else:
             self._obs = next_ob
@@ -231,19 +219,11 @@ class GoalConditionedStepCollector(StepCollector):
         self._current_path_builder = PathBuilder()
         self._obs = self._env.reset()
 
-    def _handle_rollout_ending(
-            self,
-            max_path_length,
-            discard_incomplete_paths
-    ):
+    def _handle_rollout_ending(self, max_path_length, discard_incomplete_paths):
         if len(self._current_path_builder) > 0:
             path = self._current_path_builder.get_all_stacked()
             path_len = len(path['actions'])
-            if (
-                    path_len != max_path_length
-                    and not path['terminals'][-1]
-                    and discard_incomplete_paths
-            ):
+            if (path_len != max_path_length and not path['terminals'][-1] and discard_incomplete_paths):
                 return
             self._epoch_paths.append(path)
             self._num_paths_total += 1

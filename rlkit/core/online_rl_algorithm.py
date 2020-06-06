@@ -21,7 +21,7 @@ class OnlineRLAlgorithm(BaseRLAlgorithm, metaclass=abc.ABCMeta):
             batch_size,
             max_path_length,
             num_epochs,
-            num_eval_steps_per_epoch,
+            num_eval_paths_per_epoch,
             num_expl_steps_per_train_loop,
             num_trains_per_train_loop,
             num_train_loops_per_epoch=1,
@@ -38,7 +38,7 @@ class OnlineRLAlgorithm(BaseRLAlgorithm, metaclass=abc.ABCMeta):
         self.batch_size = batch_size
         self.max_path_length = max_path_length
         self.num_epochs = num_epochs
-        self.num_eval_steps_per_epoch = num_eval_steps_per_epoch
+        self.num_eval_paths_per_epoch = num_eval_paths_per_epoch
         self.num_trains_per_train_loop = num_trains_per_train_loop
         self.num_train_loops_per_epoch = num_train_loops_per_epoch
         self.num_expl_steps_per_train_loop = num_expl_steps_per_train_loop
@@ -68,8 +68,7 @@ class OnlineRLAlgorithm(BaseRLAlgorithm, metaclass=abc.ABCMeta):
         ):
             self.eval_data_collector.collect_new_paths(
                 self.max_path_length,
-                self.num_eval_steps_per_epoch,
-                discard_incomplete_paths=True,
+                self.num_eval_paths_per_epoch,
             )
             gt.stamp('evaluation sampling')
 

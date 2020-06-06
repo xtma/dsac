@@ -33,6 +33,7 @@ def get_generic_path_information(paths, stat_prefix=''):
     statistics['Num Paths'] = len(paths)
     statistics[stat_prefix + 'Average Returns'] = get_average_returns(paths)
 
+    # rlkit path info
     for info_key in ['env_infos', 'agent_infos']:
         if info_key in paths[0]:
             all_env_infos = [
@@ -40,23 +41,36 @@ def get_generic_path_information(paths, stat_prefix=''):
                 for p in paths
             ]
             for k in all_env_infos[0].keys():
-                final_ks = np.array([info[k][-1] for info in all_env_infos])
-                first_ks = np.array([info[k][0] for info in all_env_infos])
-                all_ks = np.concatenate([info[k] for info in all_env_infos])
+                # final_ks = np.array([info[k][-1] for info in all_env_infos])
+                # first_ks = np.array([info[k][0] for info in all_env_infos])
+                # all_ks = np.concatenate([info[k] for info in all_env_infos])
+
+                # statistics.update(create_stats_ordered_dict(
+                #     stat_prefix + k,
+                #     final_ks,
+                #     stat_prefix='{}/final/'.format(info_key),
+                # ))
+                # statistics.update(create_stats_ordered_dict(
+                #     stat_prefix + k,
+                #     first_ks,
+                #     stat_prefix='{}/initial/'.format(info_key),
+                # ))
+                # statistics.update(create_stats_ordered_dict(
+                #     stat_prefix + k,
+                #     all_ks,
+                #     stat_prefix='{}/'.format(info_key),
+                # ))
+                sum_ks = [np.sum(info[k]) for info in all_env_infos]
+                average_ks = [np.mean(info[k]) for info in all_env_infos]
                 statistics.update(create_stats_ordered_dict(
                     stat_prefix + k,
-                    final_ks,
-                    stat_prefix='{}/final/'.format(info_key),
+                    sum_ks,
+                    stat_prefix='{}/sum/'.format(info_key),
                 ))
                 statistics.update(create_stats_ordered_dict(
                     stat_prefix + k,
-                    first_ks,
-                    stat_prefix='{}/initial/'.format(info_key),
-                ))
-                statistics.update(create_stats_ordered_dict(
-                    stat_prefix + k,
-                    all_ks,
-                    stat_prefix='{}/'.format(info_key),
+                    average_ks,
+                    stat_prefix='{}/average/'.format(info_key),
                 ))
 
     return statistics

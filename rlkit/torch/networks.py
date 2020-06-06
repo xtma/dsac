@@ -11,7 +11,6 @@ from rlkit.policies.base import Policy
 from rlkit.torch import pytorch_util as ptu
 from rlkit.torch.core import eval_np
 from rlkit.torch.data_management.normalizer import TorchFixedNormalizer
-from rlkit.torch.modules import LayerNorm
 
 
 def identity(x):
@@ -19,6 +18,7 @@ def identity(x):
 
 
 class Mlp(nn.Module):
+
     def __init__(
             self,
             hidden_sizes,
@@ -55,7 +55,7 @@ class Mlp(nn.Module):
             self.fcs.append(fc)
 
             if self.layer_norm:
-                ln = LayerNorm(next_size)
+                ln = nn.LayerNorm(next_size)
                 self.__setattr__("layer_norm{}".format(i), ln)
                 self.layer_norms.append(ln)
 
@@ -93,12 +93,7 @@ class MlpPolicy(Mlp, Policy):
     A simpler interface for creating policies.
     """
 
-    def __init__(
-            self,
-            *args,
-            obs_normalizer: TorchFixedNormalizer = None,
-            **kwargs
-    ):
+    def __init__(self, *args, obs_normalizer: TorchFixedNormalizer = None, **kwargs):
         super().__init__(*args, **kwargs)
         self.obs_normalizer = obs_normalizer
 
@@ -119,5 +114,6 @@ class TanhMlpPolicy(MlpPolicy):
     """
     A helper class since most policies have a tanh output activation.
     """
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, output_activation=torch.tanh, **kwargs)

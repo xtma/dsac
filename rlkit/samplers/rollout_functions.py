@@ -131,12 +131,7 @@ def rollout(
     if len(observations.shape) == 1:
         observations = np.expand_dims(observations, 1)
         next_o = np.array([next_o])
-    next_observations = np.vstack(
-        (
-            observations[1:, :],
-            np.expand_dims(next_o, 0)
-        )
-    )
+    next_observations = np.vstack((observations[1:, :], np.expand_dims(next_o, 0)))
     return dict(
         observations=observations,
         actions=actions,

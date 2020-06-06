@@ -54,6 +54,7 @@ def set_gpu_mode(mode, gpu_id=0):
     _gpu_id = gpu_id
     _use_gpu = mode
     device = torch.device("cuda:" + str(gpu_id) if _use_gpu else "cpu")
+    torch.cuda.set_device(device)
 
 
 def gpu_enabled():
@@ -103,6 +104,12 @@ def randn(*args, torch_device=None, **kwargs):
     return torch.randn(*args, **kwargs, device=torch_device)
 
 
+def rand(*args, torch_device=None, **kwargs):
+    if torch_device is None:
+        torch_device = device
+    return torch.rand(*args, **kwargs, device=torch_device)
+
+
 def zeros_like(*args, torch_device=None, **kwargs):
     if torch_device is None:
         torch_device = device
@@ -117,3 +124,26 @@ def tensor(*args, torch_device=None, **kwargs):
 
 def normal(*args, **kwargs):
     return torch.normal(*args, **kwargs).to(device)
+
+
+def fast_clip_grad_norm(parameters, max_norm):
+    r"""Clips gradient norm of an iterable of parameters.
+    Only support norm_type = 2
+    max_norm = 0, skip the total norm calculation and return 0 
+    https://pytorch.org/docs/stable/_modules/torch/nn/utils/clip_grad.html#clip_grad_norm_
+    Returns:
+        Total norm of the parameters (viewed as a single vector).
+    """
+    max_norm = float(max_norm)
+    if abs(max_norm) < 1e-6:  # max_norm = 0
+        return 0
+    else:
+        if isinstance(parameters, torch.Tensor):
+            parameters = [parameters]
+        parameters = list(filter(lambda p: p.grad is not None, parameters))
+        total_norm = torch.stack([(p.grad.detach().pow(2)).sum() for p in parameters]).sum().sqrt().item()
+        clip_coef = max_norm / (total_norm + 1e-6)
+        if clip_coef < 1:
+            for p in parameters:
+                p.grad.detach().mul_(clip_coef)
+        return total_norm

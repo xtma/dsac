@@ -7,7 +7,6 @@ from rlkit.torch.core import eval_np
 from rlkit.torch.distributions import TanhNormal
 from rlkit.torch.networks import Mlp
 
-
 LOG_SIG_MAX = 2
 LOG_SIG_MIN = -20
 
@@ -30,22 +29,9 @@ class TanhGaussianPolicy(Mlp, ExplorationPolicy):
     If return_log_prob is False (default), log_prob = None
         This is done because computing the log_prob can be a bit expensive.
     """
-    def __init__(
-            self,
-            hidden_sizes,
-            obs_dim,
-            action_dim,
-            std=None,
-            init_w=1e-3,
-            **kwargs
-    ):
-        super().__init__(
-            hidden_sizes,
-            input_size=obs_dim,
-            output_size=action_dim,
-            init_w=init_w,
-            **kwargs
-        )
+
+    def __init__(self, hidden_sizes, obs_dim, action_dim, std=None, init_w=1e-3, **kwargs):
+        super().__init__(hidden_sizes, input_size=obs_dim, output_size=action_dim, init_w=init_w, **kwargs)
         self.log_std = None
         self.std = std
         if std is None:
@@ -100,17 +86,10 @@ class TanhGaussianPolicy(Mlp, ExplorationPolicy):
             tanh_normal = TanhNormal(mean, std)
             if return_log_prob:
                 if reparameterize is True:
-                    action, pre_tanh_value = tanh_normal.rsample(
-                        return_pretanh_value=True
-                    )
+                    action, pre_tanh_value = tanh_normal.rsample(return_pretanh_value=True)
                 else:
-                    action, pre_tanh_value = tanh_normal.sample(
-                        return_pretanh_value=True
-                    )
-                log_prob = tanh_normal.log_prob(
-                    action,
-                    pre_tanh_value=pre_tanh_value
-                )
+                    action, pre_tanh_value = tanh_normal.sample(return_pretanh_value=True)
+                log_prob = tanh_normal.log_prob(action, pre_tanh_value=pre_tanh_value)
                 log_prob = log_prob.sum(dim=1, keepdim=True)
             else:
                 if reparameterize is True:
@@ -119,15 +98,25 @@ class TanhGaussianPolicy(Mlp, ExplorationPolicy):
                     action = tanh_normal.sample()
 
         return (
-            action, mean, log_std, log_prob, entropy, std,
-            mean_action_log_prob, pre_tanh_value,
+            action,
+            mean,
+            log_std,
+            log_prob,
+            entropy,
+            std,
+            mean_action_log_prob,
+            pre_tanh_value,
         )
 
 
-class MakeDeterministic(Policy):
+class MakeDeterministic(nn.Module, Policy):
+
     def __init__(self, stochastic_policy):
+        super().__init__()
         self.stochastic_policy = stochastic_policy
 
     def get_action(self, observation):
-        return self.stochastic_policy.get_action(observation,
-                                                 deterministic=True)
+        return self.stochastic_policy.get_action(observation, deterministic=True)
+
+    def get_actions(self, observation):
+        return self.stochastic_policy.get_actions(observation, deterministic=True)

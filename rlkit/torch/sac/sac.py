@@ -1,3 +1,4 @@
+import gtimer as gt
 from collections import OrderedDict
 
 import numpy as np
@@ -22,13 +23,13 @@ class SACTrainer(TorchTrainer):
             target_qf2,
             discount=0.99,
             reward_scale=1.0,
+            alpha=1.,
             policy_lr=1e-3,
             qf_lr=1e-3,
             optimizer_class=optim.Adam,
             soft_target_tau=1e-2,
             target_update_period=1,
-            plotter=None,
-            render_eval_paths=False,
+            clip_norm=0.,
             use_automatic_entropy_tuning=True,
             target_entropy=None,
     ):
@@ -53,12 +54,10 @@ class SACTrainer(TorchTrainer):
                 [self.log_alpha],
                 lr=policy_lr,
             )
-
-        self.plotter = plotter
-        self.render_eval_paths = render_eval_paths
+        else:
+            self.alpha = alpha
 
         self.qf_criterion = nn.MSELoss()
-        self.vf_criterion = nn.MSELoss()
 
         self.policy_optimizer = optimizer_class(
             self.policy.parameters(),
@@ -75,6 +74,7 @@ class SACTrainer(TorchTrainer):
 
         self.discount = discount
         self.reward_scale = reward_scale
+        self.clip_norm = clip_norm
         self.eval_statistics = OrderedDict()
         self._n_train_steps_total = 0
         self._need_to_update_eval_statistics = True
@@ -85,10 +85,11 @@ class SACTrainer(TorchTrainer):
         obs = batch['observations']
         actions = batch['actions']
         next_obs = batch['next_observations']
+        gt.stamp('preback_start', unique=False)
         """
-        Policy and Alpha Loss
+        Update Alpha
         """
-        new_obs_actions, policy_mean, policy_log_std, log_pi, *_ = self.policy(
+        new_actions, policy_mean, policy_log_std, log_pi, *_ = self.policy(
             obs,
             reparameterize=True,
             return_log_prob=True,
@@ -101,46 +102,52 @@ class SACTrainer(TorchTrainer):
             alpha = self.log_alpha.exp()
         else:
             alpha_loss = 0
-            alpha = 1
+            alpha = self.alpha
+        """
+        Update QF
+        """
+        with torch.no_grad():
+            new_next_actions, _, _, new_log_pi, *_ = self.policy(
+                next_obs,
+                reparameterize=True,
+                return_log_prob=True,
+            )
+            target_q_values = torch.min(
+                self.target_qf1(next_obs, new_next_actions),
+                self.target_qf2(next_obs, new_next_actions),
+            ) - alpha * new_log_pi
 
-        q_new_actions = torch.min(
-            self.qf1(obs, new_obs_actions),
-            self.qf2(obs, new_obs_actions),
-        )
-        policy_loss = (alpha * log_pi - q_new_actions).mean()
-        """
-        QF Loss
-        """
+            q_target = self.reward_scale * rewards + (1. - terminals) * self.discount * target_q_values
         q1_pred = self.qf1(obs, actions)
         q2_pred = self.qf2(obs, actions)
-        # Make sure policy accounts for squashing functions like tanh correctly!
-        new_next_actions, _, _, new_log_pi, *_ = self.policy(
-            next_obs,
-            reparameterize=True,
-            return_log_prob=True,
-        )
-        target_q_values = torch.min(
-            self.target_qf1(next_obs, new_next_actions),
-            self.target_qf2(next_obs, new_next_actions),
-        ) - alpha * new_log_pi
+        qf1_loss = self.qf_criterion(q1_pred, q_target)
+        qf2_loss = self.qf_criterion(q2_pred, q_target)
+        gt.stamp('preback_qf', unique=False)
 
-        q_target = self.reward_scale * rewards + (1. - terminals) * self.discount * target_q_values
-        qf1_loss = self.qf_criterion(q1_pred, q_target.detach())
-        qf2_loss = self.qf_criterion(q2_pred, q_target.detach())
-        """
-        Update networks
-        """
         self.qf1_optimizer.zero_grad()
         qf1_loss.backward()
         self.qf1_optimizer.step()
+        gt.stamp('backward_qf1', unique=False)
 
         self.qf2_optimizer.zero_grad()
         qf2_loss.backward()
         self.qf2_optimizer.step()
+        gt.stamp('backward_qf2', unique=False)
+        """
+        Update Policy
+        """
+        q_new_actions = torch.min(
+            self.qf1(obs, new_actions),
+            self.qf2(obs, new_actions),
+        )
+        policy_loss = (alpha * log_pi - q_new_actions).mean()
+        gt.stamp('preback_policy', unique=False)
 
         self.policy_optimizer.zero_grad()
         policy_loss.backward()
+        policy_grad = ptu.fast_clip_grad_norm(self.policy.parameters(), self.clip_norm)
         self.policy_optimizer.step()
+        gt.stamp('backward_policy', unique=False)
         """
         Soft Updates
         """
@@ -152,15 +159,11 @@ class SACTrainer(TorchTrainer):
         """
         if self._need_to_update_eval_statistics:
             self._need_to_update_eval_statistics = False
-            """
-            Eval should set this to None.
-            This way, these statistics are only computed for one batch.
-            """
-            policy_loss = (log_pi - q_new_actions).mean()
 
-            self.eval_statistics['QF1 Loss'] = np.mean(ptu.get_numpy(qf1_loss))
-            self.eval_statistics['QF2 Loss'] = np.mean(ptu.get_numpy(qf2_loss))
-            self.eval_statistics['Policy Loss'] = np.mean(ptu.get_numpy(policy_loss))
+            self.eval_statistics['QF1 Loss'] = qf1_loss.item()
+            self.eval_statistics['QF2 Loss'] = qf2_loss.item()
+            self.eval_statistics['Policy Loss'] = policy_loss.item()
+            self.eval_statistics['Policy Grad'] = policy_grad
             self.eval_statistics.update(create_stats_ordered_dict(
                 'Q1 Predictions',
                 ptu.get_numpy(q1_pred),
@@ -208,9 +211,9 @@ class SACTrainer(TorchTrainer):
 
     def get_snapshot(self):
         return dict(
-            policy=self.policy,
-            qf1=self.qf1,
-            qf2=self.qf2,
-            target_qf1=self.qf1,
-            target_qf2=self.qf2,
+            policy=self.policy.state_dict(),
+            qf1=self.qf1.state_dict(),
+            qf2=self.qf2.state_dict(),
+            target_qf1=self.qf1.state_dict(),
+            target_qf2=self.qf2.state_dict(),
         )

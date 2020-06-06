@@ -6,6 +6,7 @@ from rlkit.samplers.data_collector.base import PathCollector
 
 
 class MdpPathCollector(PathCollector):
+
     def __init__(
             self,
             env,
@@ -45,11 +46,7 @@ class MdpPathCollector(PathCollector):
                 max_path_length=max_path_length_this_loop,
             )
             path_len = len(path['actions'])
-            if (
-                    path_len != max_path_length
-                    and not path['terminals'][-1]
-                    and discard_incomplete_paths
-            ):
+            if (path_len != max_path_length and not path['terminals'][-1] and discard_incomplete_paths):
                 break
             num_steps_collected += path_len
             paths.append(path)
@@ -84,7 +81,32 @@ class MdpPathCollector(PathCollector):
         )
 
 
+class EvalPathCollector(MdpPathCollector):
+
+    def collect_new_paths(
+            self,
+            max_path_length,
+            num_paths,
+    ):
+        paths = []
+        num_steps_collected = 0
+        for _ in range(num_paths):
+            path = rollout(
+                self._env,
+                self._policy,
+                max_path_length=max_path_length,
+            )
+            path_len = len(path['actions'])
+            num_steps_collected += path_len
+            paths.append(path)
+        self._num_paths_total += len(paths)
+        self._num_steps_total += num_steps_collected
+        self._epoch_paths.extend(paths)
+        return paths
+
+
 class GoalConditionedPathCollector(PathCollector):
+
     def __init__(
             self,
             env,
@@ -133,11 +155,7 @@ class GoalConditionedPathCollector(PathCollector):
                 return_dict_obs=True,
             )
             path_len = len(path['actions'])
-            if (
-                    path_len != max_path_length
-                    and not path['terminals'][-1]
-                    and discard_incomplete_paths
-            ):
+            if (path_len != max_path_length and not path['terminals'][-1] and discard_incomplete_paths):
                 break
             num_steps_collected += path_len
             paths.append(path)

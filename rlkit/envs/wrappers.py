@@ -1,6 +1,6 @@
 import numpy as np
 import itertools
-from gym import Env
+from gym import Env, Wrapper
 from gym.spaces import Box
 from gym.spaces import Discrete
 from collections import deque
@@ -108,7 +108,7 @@ class DiscretizeEnv(ProxyEnv, Env):
         return super().step(continuous_action)
 
 
-class NormalizedBoxEnv(ProxyEnv):
+class NormalizedBoxEnv(Wrapper):
     """
     Normalize action to in [-1, 1].
 
@@ -122,7 +122,7 @@ class NormalizedBoxEnv(ProxyEnv):
             obs_mean=None,
             obs_std=None,
     ):
-        ProxyEnv.__init__(self, env)
+        super().__init__(env)
         self._should_normalize = not (obs_mean is None and obs_std is None)
         if self._should_normalize:
             if obs_mean is None:
@@ -136,7 +136,7 @@ class NormalizedBoxEnv(ProxyEnv):
         self._reward_scale = reward_scale
         self._obs_mean = obs_mean
         self._obs_std = obs_std
-        ub = np.ones(self._wrapped_env.action_space.shape)
+        ub = np.ones(self.env.action_space.shape)
         self.action_space = Box(-1 * ub, ub)
 
     def estimate_obs_stats(self, obs_batch, override_values=False):
@@ -144,48 +144,59 @@ class NormalizedBoxEnv(ProxyEnv):
             raise Exception("Observation mean and std already set. To " "override, set override_values to True.")
         self._obs_mean = np.mean(obs_batch, axis=0)
         self._obs_std = np.std(obs_batch, axis=0)
+        self._should_normalize = True
 
     def _apply_normalize_obs(self, obs):
         return (obs - self._obs_mean) / (self._obs_std + 1e-8)
 
     def step(self, action):
-        lb = self._wrapped_env.action_space.low
-        ub = self._wrapped_env.action_space.high
+        lb = self.env.action_space.low
+        ub = self.env.action_space.high
         scaled_action = lb + (action + 1.) * 0.5 * (ub - lb)
         scaled_action = np.clip(scaled_action, lb, ub)
 
-        wrapped_step = self._wrapped_env.step(scaled_action)
+        wrapped_step = self.env.step(scaled_action)
         next_obs, reward, done, info = wrapped_step
         if self._should_normalize:
             next_obs = self._apply_normalize_obs(next_obs)
         return next_obs, reward * self._reward_scale, done, info
 
     def __str__(self):
-        return "Normalized: %s" % self._wrapped_env
+        return "Normalized: %s" % self.env
 
 
-class NoInfoEnv(ProxyEnv):
+class CustomInfoEnv(Wrapper):
 
     def __init__(self, wrapped_env):
+
+        env_id = wrapped_env.spec.id
+        if env_id in [
+                "Walker2d-v2",  # mujoco
+                "Hopper-v2",
+                "Ant-v2",
+                "HalfCheetah-v2",
+                "Humanoid-v2",
+                "HumanoidStandup-v2",
+                "Walker2d-v3",  # mujoco
+                "Hopper-v3",
+                "Ant-v3",
+                "HalfCheetah-v3",
+                "Humanoid-v3",
+        ]:
+            self.env_type = "mujoco"
+        elif env_id in [
+                "LunarLanderContinuous-v2",
+                "BipedalWalker-v3",
+                "BipedalWalkerHardcore-v3",
+        ]:
+            self.env_type = "box2d"
+
         super().__init__(wrapped_env)
 
     def step(self, action):
-        state, reward, done, info = self.wrapped_env.step(action)
-        return state, reward, done, {}
-
-
-class HighwayWrapper(ProxyEnv):
-
-    def __init__(self, wrapped_env):
-        super().__init__(wrapped_env)
-        self.observation_space = Box(-np.inf, np.inf, (18,))
-
-    def reset(self):
-        return self.flatten_obs(self.wrapped_env.reset())
-
-    def step(self, action):
-        state, reward, done, info = self.wrapped_env.step(action)
-        return self.flatten_obs(state), reward, done, {}
-
-    def flatten_obs(self, obs):
-        return np.hstack([obs["achieved_goal"], obs["desired_goal"], obs["observation"]])
+        state, reward, done, info = self.env.step(action)
+        if self.env_type == "mujoco":
+            custom_info = {'failed': done}
+        if self.env_type == "box2d":
+            custom_info = {'failed': reward <= -100}
+        return state, reward, done, custom_info

@@ -7,8 +7,7 @@ class ReplayBuffer(object, metaclass=abc.ABCMeta):
     """
 
     @abc.abstractmethod
-    def add_sample(self, observation, action, reward, next_observation,
-                   terminal, **kwargs):
+    def add_sample(self, observation, action, reward, next_observation, terminal, **kwargs):
         """
         Add a transition tuple.
         """
@@ -49,16 +48,17 @@ class ReplayBuffer(object, metaclass=abc.ABCMeta):
                 next_obs,
                 terminal,
                 agent_info,
-                env_info
-        ) in enumerate(zip(
-            path["observations"],
-            path["actions"],
-            path["rewards"],
-            path["next_observations"],
-            path["terminals"],
-            path["agent_infos"],
-            path["env_infos"],
-        )):
+                env_info,
+        ) in enumerate(
+                zip(
+                    path["observations"],
+                    path["actions"],
+                    path["rewards"],
+                    path["next_observations"],
+                    path["terminals"],
+                    path["agent_infos"],
+                    path["env_infos"],
+                )):
             self.add_sample(
                 observation=obs,
                 action=action,
@@ -91,4 +91,3 @@ class ReplayBuffer(object, metaclass=abc.ABCMeta):
 
     def end_epoch(self, epoch):
         return
-

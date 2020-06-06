@@ -1,16 +1,15 @@
-import gtimer as gt
 from collections import OrderedDict
 
-import numpy as np
 import torch
 import torch.optim as optim
 from torch.nn import functional as F
 
+import gtimer as gt
 import rlkit.torch.pytorch_util as ptu
 from rlkit.core.eval_util import create_stats_ordered_dict
+from rlkit.torch.dsac.risk import distortion_de
 from rlkit.torch.torch_rl_algorithm import TorchTrainer
 
-from .risk import distortion_de
 from .utils import LinearSchedule
 
 
@@ -31,11 +30,10 @@ def quantile_regression_loss(input, target, tau, weight):
     return rho.sum(dim=-1).mean()
 
 
-class DSACTrainer(TorchTrainer):
+class TD4Trainer(TorchTrainer):
 
     def __init__(
             self,
-            env,
             policy,
             target_policy,
             zf1,
@@ -44,9 +42,10 @@ class DSACTrainer(TorchTrainer):
             target_zf2,
             fp=None,
             target_fp=None,
+            target_policy_noise=0.2,
+            target_policy_noise_clip=0.5,
             discount=0.99,
             reward_scale=1.0,
-            alpha=1.0,
             policy_lr=3e-4,
             zf_lr=3e-4,
             tau_type='iqn',
@@ -58,38 +57,23 @@ class DSACTrainer(TorchTrainer):
             risk_schedule_timesteps=1,
             optimizer_class=optim.Adam,
             soft_target_tau=5e-3,
-            target_update_period=1,
+            policy_and_target_update_period=2,
+            max_action=1.,
             clip_norm=0.,
-            use_automatic_entropy_tuning=False,
-            target_entropy=None,
     ):
         super().__init__()
-        self.env = env
         self.policy = policy
         self.target_policy = target_policy
         self.zf1 = zf1
         self.zf2 = zf2
         self.target_zf1 = target_zf1
         self.target_zf2 = target_zf2
-
+        self.target_policy_noise = target_policy_noise
+        self.target_policy_noise_clip = target_policy_noise_clip
+        self.policy_and_target_update_period = policy_and_target_update_period
         self.soft_target_tau = soft_target_tau
-        self.target_update_period = target_update_period
         self.tau_type = tau_type
         self.num_quantiles = num_quantiles
-
-        self.use_automatic_entropy_tuning = use_automatic_entropy_tuning
-        if self.use_automatic_entropy_tuning:
-            if target_entropy:
-                self.target_entropy = target_entropy
-            else:
-                self.target_entropy = -np.prod(self.env.action_space.shape).item()  # heuristic value from Tuomas
-            self.log_alpha = ptu.zeros(1, requires_grad=True)
-            self.alpha_optimizer = optimizer_class(
-                [self.log_alpha],
-                lr=policy_lr,
-            )
-        else:
-            self.alpha = alpha
 
         self.zf_criterion = quantile_regression_loss
 
@@ -97,7 +81,6 @@ class DSACTrainer(TorchTrainer):
             self.policy.parameters(),
             lr=policy_lr,
         )
-
         self.zf1_optimizer = optimizer_class(
             self.zf1.parameters(),
             lr=zf_lr,
@@ -117,6 +100,7 @@ class DSACTrainer(TorchTrainer):
 
         self.discount = discount
         self.reward_scale = reward_scale
+        self.max_action = max_action
         self.clip_norm = clip_norm
 
         self.risk_type = risk_type
@@ -152,36 +136,18 @@ class DSACTrainer(TorchTrainer):
         next_obs = batch['next_observations']
         gt.stamp('preback_start', unique=False)
         """
-        Update Alpha
-        """
-        new_actions, policy_mean, policy_log_std, log_pi, *_ = self.policy(
-            obs,
-            reparameterize=True,
-            return_log_prob=True,
-        )
-        if self.use_automatic_entropy_tuning:
-            alpha_loss = -(self.log_alpha.exp() * (log_pi + self.target_entropy).detach()).mean()
-            self.alpha_optimizer.zero_grad()
-            alpha_loss.backward()
-            self.alpha_optimizer.step()
-            alpha = self.log_alpha.exp()
-        else:
-            alpha_loss = 0
-            alpha = self.alpha
-        gt.stamp('preback_alpha', unique=False)
-        """
-        Update ZF
+        Update QF
         """
         with torch.no_grad():
-            new_next_actions, _, _, new_log_pi, *_ = self.target_policy(
-                next_obs,
-                reparameterize=True,
-                return_log_prob=True,
-            )
-            next_tau, next_tau_hat, next_presum_tau = self.get_tau(next_obs, new_next_actions, fp=self.target_fp)
-            target_z1_values = self.target_zf1(next_obs, new_next_actions, next_tau_hat)
-            target_z2_values = self.target_zf2(next_obs, new_next_actions, next_tau_hat)
-            target_z_values = torch.min(target_z1_values, target_z2_values) - alpha * new_log_pi
+            next_actions = self.target_policy(next_obs)
+            noise = ptu.randn(next_actions.shape) * self.target_policy_noise
+            noise = torch.clamp(noise, -self.target_policy_noise_clip, self.target_policy_noise_clip)
+            noisy_next_actions = torch.clamp(next_actions + noise, -self.max_action, self.max_action)
+
+            next_tau, next_tau_hat, next_presum_tau = self.get_tau(next_obs, noisy_next_actions, fp=self.target_fp)
+            target_z1_values = self.target_zf1(next_obs, noisy_next_actions, next_tau_hat)
+            target_z2_values = self.target_zf2(next_obs, noisy_next_actions, next_tau_hat)
+            target_z_values = torch.min(target_z1_values, target_z2_values)
             z_target = self.reward_scale * rewards + (1. - terminals) * self.discount * target_z_values
 
         tau, tau_hat, presum_tau = self.get_tau(obs, actions, fp=self.fp)
@@ -209,57 +175,50 @@ class DSACTrainer(TorchTrainer):
                                 2 * self.zf2(obs, actions, tau[:, :-1]) - z2_pred[:, :-1] - z2_pred[:, 1:])
                 dWdtau /= dWdtau.shape[0]  # (N, T-1)
             gt.stamp('preback_fp', unique=False)
-
             self.fp_optimizer.zero_grad()
             tau[:, :-1].backward(gradient=dWdtau)
             self.fp_optimizer.step()
             gt.stamp('backward_fp', unique=False)
         """
-        Update Policy
+        Policy Loss
         """
+        policy_actions = self.policy(obs)
         risk_param = self.risk_schedule(self._n_train_steps_total)
 
         if self.risk_type == 'VaR':
             tau_ = ptu.ones_like(rewards) * risk_param
-            q1_new_actions = self.zf1(obs, new_actions, tau_)
-            q2_new_actions = self.zf2(obs, new_actions, tau_)
+            q_new_actions = self.zf1(obs, policy_actions, tau_)
         else:
             with torch.no_grad():
-                new_tau, new_tau_hat, new_presum_tau = self.get_tau(obs, new_actions, fp=self.fp)
-            z1_new_actions = self.zf1(obs, new_actions, new_tau_hat)
-            z2_new_actions = self.zf2(obs, new_actions, new_tau_hat)
+                new_tau, new_tau_hat, new_presum_tau = self.get_tau(obs, policy_actions, fp=self.fp)
+            z_new_actions = self.zf1(obs, policy_actions, new_tau_hat)
             if self.risk_type in ['neutral', 'std']:
-                q1_new_actions = torch.sum(new_presum_tau * z1_new_actions, dim=1, keepdims=True)
-                q2_new_actions = torch.sum(new_presum_tau * z2_new_actions, dim=1, keepdims=True)
+                q_new_actions = torch.sum(new_presum_tau * z_new_actions, dim=1, keepdims=True)
                 if self.risk_type == 'std':
-                    q1_std = new_presum_tau * (z1_new_actions - q1_new_actions).pow(2)
-                    q2_std = new_presum_tau * (z2_new_actions - q2_new_actions).pow(2)
-                    q1_new_actions -= risk_param * q1_std.sum(dim=1, keepdims=True).sqrt()
-                    q2_new_actions -= risk_param * q2_std.sum(dim=1, keepdims=True).sqrt()
+                    q_std = new_presum_tau * (z_new_actions - q_new_actions).pow(2)
+                    q_new_actions -= risk_param * q_std.sum(dim=1, keepdims=True).sqrt()
             else:
                 with torch.no_grad():
                     risk_weights = distortion_de(new_tau_hat, self.risk_type, risk_param)
-                q1_new_actions = torch.sum(risk_weights * new_presum_tau * z1_new_actions, dim=1, keepdims=True)
-                q2_new_actions = torch.sum(risk_weights * new_presum_tau * z2_new_actions, dim=1, keepdims=True)
-        q_new_actions = torch.min(q1_new_actions, q2_new_actions)
+                q_new_actions = torch.sum(risk_weights * new_presum_tau * z_new_actions, dim=1, keepdims=True)
 
-        policy_loss = (alpha * log_pi - q_new_actions).mean()
+        policy_loss = -q_new_actions.mean()
+
         gt.stamp('preback_policy', unique=False)
 
-        self.policy_optimizer.zero_grad()
-        policy_loss.backward()
-        policy_grad = ptu.fast_clip_grad_norm(self.policy.parameters(), self.clip_norm)
-        self.policy_optimizer.step()
-        gt.stamp('backward_policy', unique=False)
-        """
-        Soft Updates
-        """
-        if self._n_train_steps_total % self.target_update_period == 0:
+        if self._n_train_steps_total % self.policy_and_target_update_period == 0:
+            self.policy_optimizer.zero_grad()
+            policy_loss.backward()
+            policy_grad = ptu.fast_clip_grad_norm(self.policy.parameters(), self.clip_norm)
+            self.policy_optimizer.step()
+            gt.stamp('backward_policy', unique=False)
+
             ptu.soft_update_from_to(self.policy, self.target_policy, self.soft_target_tau)
             ptu.soft_update_from_to(self.zf1, self.target_zf1, self.soft_target_tau)
             ptu.soft_update_from_to(self.zf2, self.target_zf2, self.soft_target_tau)
             if self.tau_type == 'fqf':
                 ptu.soft_update_from_to(self.fp, self.target_fp, self.soft_target_tau)
+        gt.stamp('soft_update', unique=False)
         """
         Save some statistics for eval
         """
@@ -269,7 +228,6 @@ class DSACTrainer(TorchTrainer):
             Eval should set this to None.
             This way, these statistics are only computed for one batch.
             """
-            policy_loss = (log_pi - q_new_actions).mean()
 
             self.eval_statistics['ZF1 Loss'] = zf1_loss.item()
             self.eval_statistics['ZF2 Loss'] = zf2_loss.item()
@@ -288,21 +246,10 @@ class DSACTrainer(TorchTrainer):
                 ptu.get_numpy(z_target),
             ))
             self.eval_statistics.update(create_stats_ordered_dict(
-                'Log Pis',
-                ptu.get_numpy(log_pi),
-            ))
-            self.eval_statistics.update(create_stats_ordered_dict(
-                'Policy mu',
-                ptu.get_numpy(policy_mean),
-            ))
-            self.eval_statistics.update(create_stats_ordered_dict(
-                'Policy log std',
-                ptu.get_numpy(policy_log_std),
+                'Policy Action',
+                ptu.get_numpy(policy_actions),
             ))
 
-            if self.use_automatic_entropy_tuning:
-                self.eval_statistics['Alpha'] = alpha.item()
-                self.eval_statistics['Alpha Loss'] = alpha_loss.item()
         self._n_train_steps_total += 1
 
     def get_diagnostics(self):
